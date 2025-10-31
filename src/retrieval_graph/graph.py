@@ -34,7 +34,7 @@ print("Project:", os.getenv("LANGSMITH_PROJECT"))
 client = Client()
 print("Projects:", [p.name for p in client.list_projects()])
 
-MAX_TOOL_CALLS = 4
+MAX_TOOL_CALLS = 20
 
 TOOL_DEFINITIONS = [
     {
@@ -220,7 +220,8 @@ async def call_tool(
     collected_docs: list[Document] = []
     collected_queries: list[str] = []
     tool_messages: list[ToolMessage] = []
-    tool_call_count = getattr(state, "tool_call_count", 0)
+    tool_call_count = int(getattr(state, "tool_call_count", 0) or 0)
+    sources: list[dict[str, Any]] = []
 
     last_message = state.messages[-1]
     tool_calls = getattr(last_message, "tool_calls", []) or []
@@ -229,6 +230,8 @@ async def call_tool(
         name = tool_call.get("name")
         args = tool_call.get("args") or {}
         call_id = tool_call.get("id")
+
+        source_record: dict[str, Any] | None = None
 
         if tool_call_count >= MAX_TOOL_CALLS:
             content = (
@@ -261,6 +264,12 @@ async def call_tool(
                 payload = fetch_chart(series_id)
                 attachments.extend(payload.get("attachments", []))
                 content = payload.get("message", f"Chart generated for {series_id}.")
+                tool_call_count += 1
+                source_record = {
+                    "tool": name,
+                    "series_id": series_id,
+                    "attachments": payload.get("attachments", []),
+                }
         elif name == "fred_recent_data":
             series_id = args.get("series_id")
             if not series_id:
@@ -271,6 +280,12 @@ async def call_tool(
                 series_data.extend(series_blocks)
                 block_json = json.dumps(series_blocks, indent=2)
                 content = f"{payload.get('message', 'Retrieved series data.')}\n{block_json}"
+                tool_call_count += 1
+                source_record = {
+                    "tool": name,
+                    "series_id": series_id,
+                    "series_data": series_blocks,
+                }
         # elif name == "fred_release_schedule":
         #     release_id = args.get("release_id")
         #     if release_id in (None, ""):
@@ -313,6 +328,11 @@ async def call_tool(
                     lines.append("No release dates returned.")
                 content = "\n".join(lines)
                 tool_call_count += 1
+                source_record = {
+                    "tool": name,
+                    "series_id": series_id,
+                    "release_schedule": schedule,
+                }
         elif name == "fred_release_structure":
             release_name = args.get("release_name")
             if not release_name:
@@ -327,17 +347,11 @@ async def call_tool(
                 )
                 content = f"{message}\n{json.dumps(payload, indent=2)}"
                 tool_call_count += 1
-        elif name == "fraser_search_fomc_titles":
-            query = args.get("query")
-            if not query:
-                content = "A query is required to search FOMC titles."
-            else:
-                payload = search_fomc_titles(query)
-                message = payload.get(
-                    "message",
-                    f"Retrieved FOMC titles for '{query}'.",
-                )
-                content = f"{message}\n{json.dumps(payload, indent=2)}"
+                source_record = {
+                    "tool": name,
+                    "release_name": release_name,
+                    "data": payload,
+                }
         elif name == "fred_search_series":
             query = args.get("query")
             if not query:
@@ -350,6 +364,11 @@ async def call_tool(
                 )
                 content = f"{message}\n{json.dumps(payload, indent=2)}"
                 tool_call_count += 1
+                source_record = {
+                    "tool": name,
+                    "query": query,
+                    "results": payload.get("results", []),
+                }
         elif name == "fraser_search_fomc_titles":
             query = args.get("query")
             if not query:
@@ -362,6 +381,11 @@ async def call_tool(
                 )
                 content = f"{message}\n{json.dumps(payload, indent=2)}"
                 tool_call_count += 1
+                source_record = {
+                    "tool": name,
+                    "query": query,
+                    "results": payload.get("results", []),
+                }
         else:
             content = f"Tool '{name}' is not implemented."
 
@@ -371,10 +395,13 @@ async def call_tool(
                 tool_call_id=call_id or "",
             )
         )
+        if source_record:
+            sources.append(source_record)
 
     updates: dict[str, Any] = {
         "messages": tool_messages,
         "tool_call_count": tool_call_count,
+        "sources": sources,
     }
     if attachments:
         updates["attachments"] = attachments

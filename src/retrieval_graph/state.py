@@ -130,6 +130,12 @@ class InputState:
         If a message in `right` has the same ID as a message in `left`, the
         message from `right` will replace the message from `left`."""
 
+    tool_call_count: int = 0
+    """Reset the per-turn tool call counter when a new InputState is provided."""
+
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    """Fresh list of sources for each new invocation supplied by the caller."""
+
 
 # This is the primary state of your agent, where you can store any information
 
@@ -176,6 +182,18 @@ def add_series_data(
     return base
 
 
+def add_sources(
+    existing: Optional[Sequence[dict[str, Any]]],
+    new: Union[Sequence[dict[str, Any]], dict[str, Any], None],
+) -> list[dict[str, Any]]:
+    # """Accumulate citations/sources produced by tool calls."""
+    # if not new:
+    #     return []
+    base = list(existing) if existing else []
+    base.extend(_coerce_sequence(new))
+    return base
+
+
 @dataclass(kw_only=True)
 class State(InputState):
     """The state of your graph / agent."""
@@ -198,5 +216,8 @@ class State(InputState):
 
     tool_call_count: int = 0
     """Number of tool invocations so far in this run (prevents infinite loops)."""
+
+    sources: Annotated[list[dict[str, Any]], add_sources] = field(default_factory=list)
+    """Lightweight citation records collected from tool calls."""
     # Feel free to add additional attributes to your state as needed.
     # Common examples include retrieved documents, extracted entities, API connections, etc.
