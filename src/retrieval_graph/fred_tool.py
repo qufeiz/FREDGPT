@@ -8,6 +8,8 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 import requests
+import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
 from fredapi import Fred
 
@@ -76,6 +78,13 @@ class FredClient:
             observations=observations,
             notes=info.get("notes"),
         )
+
+    def get_series(self, series_id: str) -> pd.Series:
+        """Fetch full historical series as a pandas Series."""
+        data = self._fred.get_series(series_id)
+        if not isinstance(data.index, pd.DatetimeIndex):
+            data.index = pd.to_datetime(data.index)
+        return data
 
 
 @lru_cache(maxsize=1)
@@ -166,6 +175,112 @@ def fetch_recent_data(series_id: str, *, latest_points: int = 12) -> dict[str, A
         return {
             "message": f"Failed to fetch recent data for '{series_id}': {exc}",
             "series_data": [],
+            "error": str(exc),
+        }
+
+
+def analyze_series_correlation(
+    *,
+    start_date: str = "1970-01-01",
+    end_date: str = "1979-12-31",
+    max_lag_months: int = 48,
+    leading_series_id: str = "M2SL",
+    lagging_series_id: str = "CPIAUCSL",
+) -> dict[str, Any]:
+    """Correlate YoY growth of two FRED series and inspect lead/lag behaviour."""
+    try:
+        client = get_fred_client()
+        leading = client.get_series(leading_series_id)
+        lagging = client.get_series(lagging_series_id)
+
+        leading = leading.loc[(leading.index >= start_date) & (leading.index <= end_date)]
+        lagging = lagging.loc[(lagging.index >= start_date) & (lagging.index <= end_date)]
+
+        yoy_df = pd.concat(
+            {
+                "leading_yoy": leading.pct_change(12) * 100,
+                "lagging_yoy": lagging.pct_change(12) * 100,
+            },
+            axis=1,
+        ).dropna()
+
+        if yoy_df.empty:
+            return {
+                "message": (
+                    "Insufficient overlapping data to compute year-over-year correlation "
+                    f"between {leading_series_id} and {lagging_series_id} for {start_date} to {end_date}."
+                ),
+                "analysis": {},
+            }
+
+        yoy_corr = float(yoy_df["leading_yoy"].corr(yoy_df["lagging_yoy"]))
+
+        lag_results: list[dict[str, float]] = []
+        max_lag = max(0, int(max_lag_months))
+        for lag in range(0, max_lag + 1):
+            shifted = yoy_df["leading_yoy"].shift(lag)
+            aligned = pd.concat(
+                {"leading_yoy_shifted": shifted, "lagging_yoy": yoy_df["lagging_yoy"]},
+                axis=1,
+            ).dropna()
+            if aligned.empty:
+                continue
+            corr_value = float(aligned["leading_yoy_shifted"].corr(aligned["lagging_yoy"]))
+            lag_results.append({"lag_months": lag, "correlation": corr_value})
+
+        best_positive: dict[str, float] | None = None
+        worst_negative: dict[str, float] | None = None
+        if lag_results:
+            best_entry = max(lag_results, key=lambda item: item["correlation"])
+            best_positive = {
+                "lag_months": int(best_entry["lag_months"]),
+                "correlation": best_entry["correlation"],
+            }
+            worst_entry = min(lag_results, key=lambda item: item["correlation"])
+            worst_negative = {
+                "lag_months": int(worst_entry["lag_months"]),
+                "correlation": worst_entry["correlation"],
+            }
+
+        trend_df = pd.concat(
+            {
+                "log_leading": np.log(leading[leading > 0]),
+                "log_lagging": np.log(lagging[lagging > 0]),
+            },
+            axis=1,
+        ).dropna()
+        log_corr = float(trend_df["log_leading"].corr(trend_df["log_lagging"])) if not trend_df.empty else None
+
+        guidance_lines = [
+            "Interpretation hints:",
+            "- If both series are growth rates and the YoY correlation is negative, consider policy reactions or timing differences (e.g., central bank tightening).",
+            "- A high log-level correlation with a low or opposite short-run correlation suggests strong long-run co-movement but differing cycle dynamics.",
+            "- Remember that raw levels can be non-stationary; highlight possible spurious correlations if trends aren’t removed.",
+            "- Avoid causal language; describe results as associations (e.g., 'tends to move with').",
+        ]
+
+        return {
+            "message": (
+                f"Computed correlations between {leading_series_id} (leading) and "
+                f"{lagging_series_id} (lagging) from {start_date} to {end_date}."
+            ),
+            "analysis": {
+                "window": {"start": start_date, "end": end_date},
+                "series_ids": {
+                    "leading": leading_series_id,
+                    "lagging": lagging_series_id,
+                },
+                "yoy_correlation": yoy_corr,
+                "best_positive_lag": best_positive,
+                "most_negative_lag": worst_negative,
+                "log_level_correlation": log_corr,
+            },
+            "analysis_guidance": "\n".join(guidance_lines),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "message": "Failed to compute series correlation.",
+            "analysis": {},
             "error": str(exc),
         }
 

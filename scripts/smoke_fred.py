@@ -35,6 +35,7 @@ from retrieval_graph.fred_tool import (
     fetch_recent_data,
     fetch_series_release_schedule,
     fetch_release_structure_by_name,
+    analyze_series_correlation,
     search_series,
 )  # noqa: E402
 from retrieval_graph.fraser_tool import search_fomc_titles  # noqa: E402
@@ -126,7 +127,37 @@ async def main() -> None:
         "--fomc-query",
         type=str,
         default="jan 2010 fomc statement",
-        help="Optional fuzzy query to test the FRASER/Postgres FOMC title search.",
+    help="Optional fuzzy query to test the FRASER/Postgres FOMC title search.",
+)
+    parser.add_argument(
+        "--leading-series",
+        type=str,
+        default="M2SL",
+        help="Series assumed to lead (default: M2SL).",
+    )
+    parser.add_argument(
+        "--lagging-series",
+        type=str,
+        default="CPIAUCSL",
+        help="Series assumed to lag (default: CPIAUCSL).",
+    )
+    parser.add_argument(
+        "--corr-start",
+        type=str,
+        default="1970-01-01",
+        help="Start date for correlation window (default: 1970-01-01).",
+    )
+    parser.add_argument(
+        "--corr-end",
+        type=str,
+        default="1979-12-31",
+        help="End date for correlation window (default: 1979-12-31).",
+    )
+    parser.add_argument(
+        "--corr-max-lag",
+        type=int,
+        default=48,
+        help="Max lag (months) to test in correlation helper (default: 48).",
     )
     args = parser.parse_args()
 
@@ -166,25 +197,37 @@ async def main() -> None:
     #     schedule_payload = fetch_release_schedule(args.release_id)
     #     dump_section("Release Schedule", schedule_payload)
 
-    series_release_payload = fetch_series_release_schedule(args.series_id)
-    dump_section("Series Release Schedule", series_release_payload)
+    correlation_payload = analyze_series_correlation(
+        start_date=args.corr_start,
+        end_date=args.corr_end,
+        max_lag_months=args.corr_max_lag,
+        leading_series_id=args.leading_series,
+        lagging_series_id=args.lagging_series,
+    )
+    dump_section(
+        "Series Correlation",
+        correlation_payload,
+    )
 
-    if args.release_name:
-        structure_payload = fetch_release_structure_by_name(args.release_name)
-        dump_section("Release Structure", structure_payload)
+    # series_release_payload = fetch_series_release_schedule(args.series_id)
+    # dump_section("Series Release Schedule", series_release_payload)
 
-    if args.search_query:
-        search_payload = search_series(args.search_query)
-        dump_section("Series Search", search_payload)
+    # if args.release_name:
+    #     structure_payload = fetch_release_structure_by_name(args.release_name)
+    #     dump_section("Release Structure", structure_payload)
 
-    if args.fomc_query:
-        fomc_payload = search_fomc_titles(args.fomc_query)
-        dump_section("FRASER FOMC Title Search", fomc_payload)
+    # if args.search_query:
+    #     search_payload = search_series(args.search_query)
+    #     dump_section("Series Search", search_payload)
 
-    if args.prompt:
-        await run_agent(args.series_id, args.prompt, args.user_id)
-    else:
-        print("\nAgent step skipped (no prompt provided).")
+    # if args.fomc_query:
+    #     fomc_payload = search_fomc_titles(args.fomc_query)
+    #     dump_section("FRASER FOMC Title Search", fomc_payload)
+
+    # if args.prompt:
+    #     await run_agent(args.series_id, args.prompt, args.user_id)
+    # else:
+    #     print("\nAgent step skipped (no prompt provided).")
 
 
 if __name__ == "__main__":
