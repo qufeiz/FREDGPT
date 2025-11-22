@@ -75,6 +75,82 @@ langgraph run retrieval_graph --config '{"configurable": {"user_id": "analyst-42
 ```
 The `user_id` only matters when you add document retrieval. All other tools (FRED, FRASER, FOMC snapshot) work out of the box once env vars are set.
 
+## FastAPI bridge
+Prefer a REST-style entry point? Launch the bundled FastAPI server:
+```bash
+uvicorn src.api_server:app --reload
+```
+- `POST /ask` accepts `{"text": ..., "conversation": [...]}`. Each request resets `tool_call_count` to `0`, so every user turn gets a fresh tool budget.
+- Responses include the assistant text plus any `attachments`, `series_data`, `sources`, and the final `tool_call_count`.
+
+
+### Manual API tests
+Once the server is running, try a few `curl` calls:
+```bash
+# Latest FOMC decision (services.py)
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{ "text": "Show me the latest FOMC decision", "conversation": [] }'
+
+# Follow-up question with prior context (conversation replay + tool reset)
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+        "text": "What about unemployment now?",
+        "conversation": [
+          { "role": "user", "content": "Compare CPI and unemployment trends." },
+          { "role": "assistant", "content": "Here is the CPI info…" }
+        ]
+      }'
+
+# FRASER title lookup (Postgres connectivity)
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{ "text": "Find the January 2010 FOMC minutes.", "conversation": [] }'
+```
+Inspect the responses to verify attachments, series data, sources, and tool counts are present end-to-end.
+
+### Response schema
+Each `/ask` response returns:
+```json
+{
+  "response": "<assistant markdown/text>",
+  "attachments": [
+    {
+      "type": "image",
+      "source": "data:image/png;base64,...",
+      "title": "CPI chart",
+      "series_id": "CPIAUCSL",
+      "chart_url": "https://fred.stlouisfed.org/graph/fredgraph.png?id=CPIAUCSL"
+    }
+  ],
+  "series_data": [
+    {
+      "series_id": "UNRATE",
+      "title": "Unemployment Rate",
+      "units": "Percent",
+      "frequency": "Monthly",
+      "notes": "...",
+      "points": [
+        { "date": "2025-01-01", "value": 4.0 },
+        { "date": "2025-02-01", "value": 4.1 }
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "tool": "fred_recent_data",
+      "series_id": "UNRATE",
+      "series_data": [ { "series_id": "UNRATE", "points": [...] } ]
+    }
+  ],
+  "tool_call_count": 2
+}
+```
+- `attachments`, `series_data`, and `sources` are optional arrays; omit them when empty.
+- `tool_call_count` is the number of tools the agent used during that turn.
+- Render `response` as markdown, display attachments/structured data inline, and use `sources` as lightweight citations in your frontend.
+
 ## Architecture
 ### Conversation loop
 `graph.py` defines a `StateGraph` with two nodes:
@@ -102,7 +178,7 @@ Attachments (chart images) and structured datapoints never enter the LLM prompt�
 ### Observability
 Set `LANGSMITH_API_KEY` and (optionally) `LANGSMITH_PROJECT` to stream every run into LangSmith. `graph.py` prints the API key and project on startup so you know tracing is working. You can still disable tracing entirely for offline experimentation.
 
-## Configuration reference
+<!-- ## Configuration reference
 Beyond `.env`, LangGraph lets you pass configuration via `--config` or Studio. Useful keys:
 
 | Config key | Default | Purpose |
@@ -111,7 +187,7 @@ Beyond `.env`, LangGraph lets you pass configuration via `--config` or Studio. U
 | `configurable.embedding_model` | `openai/text-embedding-3-small` | Only used once you configure document ingestion. |
 | `configurable.retriever_provider` | `pinecone` | Placeholder; swap to whatever vector store you wire up later. |
 | `configurable.response_system_prompt` | See `prompts.py` | Governs assistant tone + behavior. |
-| `configurable.response_model` | `openai/gpt-4.1` | Template default; the runtime actually pins Bedrock Claude via code—update `graph.py` if you want to make this configurable again. |
+| `configurable.response_model` | `openai/gpt-4.1` | Template default; the runtime actually pins Bedrock Claude via code—update `graph.py` if you want to make this configurable again. | -->
 
 ## Development workflow
 - `make test` (or `pytest`) exercises the unit tests under `tests/`.

@@ -239,7 +239,11 @@ async def call_model(
         ]
     )
     # model = load_chat_model(configuration.response_model).bind_tools(TOOL_DEFINITIONS)
-    session = boto3.Session(profile_name="AWSAdministratorAccess-112393354239")
+    profile_name = os.environ.get("AWS_PROFILE")
+    if profile_name:
+        session = boto3.Session(profile_name=profile_name)
+    else:
+        session = boto3.Session()
     bedrock_client = session.client("bedrock-runtime", region_name="us-east-1")
     
     model = ChatBedrockConverse(

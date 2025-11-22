@@ -88,7 +88,7 @@ async def ask(query: Query, current_user: dict = Depends(get_current_user)):
         messages.append(HumanMessage(content=query.text))
 
         result = await graph.ainvoke(
-            {"messages": messages},
+            {"messages": messages, "tool_call_count": 0},
             {"configurable": {"user_id": user_id}},
         )
 
@@ -102,6 +102,11 @@ async def ask(query: Query, current_user: dict = Depends(get_current_user)):
             if isinstance(block, dict):
                 series_data.append(block)
 
+        sources: List[Dict[str, str]] = []
+        for source in result.get("sources", []) or []:
+            if isinstance(source, dict):
+                sources.append(source)
+
         for message in reversed(result["messages"]):
             if hasattr(message, "content") and message.content:
                 logger.info(f"Response sent to user {user_id}")
@@ -110,6 +115,9 @@ async def ask(query: Query, current_user: dict = Depends(get_current_user)):
                     payload["attachments"] = attachments
                 if series_data:
                     payload["series_data"] = series_data
+                if sources:
+                    payload["sources"] = sources
+                payload["tool_call_count"] = int(result.get("tool_call_count") or 0)
                 return payload
 
         logger.warning(f"No response generated for user {user_id}")
